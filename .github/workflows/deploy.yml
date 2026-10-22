@@ -3,7 +3,7 @@ name: Deploy
 on:
   # push:
   #   branches: [main]
-  workflow_dispatch:
+  worflow_dispatch:
 
 concurrency:
   group: Deploy-${{ github.ref }}
@@ -83,7 +83,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── REPLACED: SSH + docker compose → ECS blue/green via CodeDeploy ─
+  # ── REPLACED: SSH + docker compose → ECS built-in blue/green ───────
   deploy:
     name: Deploy ${{ matrix.service }}
     needs: build-and-push
@@ -95,10 +95,8 @@ jobs:
         include:
           - service: frontend
             repo: crud-nextjs-frontend
-            port: 3000
           - service: backend
             repo: crud-parse-server-backend
-            port: 1337
     steps:
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -124,33 +122,15 @@ jobs:
           container-name: ${{ matrix.service }}
           image: ${{ steps.login-ecr.outputs.registry }}/${{ matrix.repo }}:${{ needs.build-and-push.outputs.sha }}
 
-      # 3. AppSpec: tells CodeDeploy which container/port the ALB routes to.
-      #    The deploy action fills in TaskDefinition with the new revision ARN.
-      - name: Write appspec
-        run: |
-          cat > appspec.yaml <<EOF
-          version: 0.0
-          Resources:
-            - TargetService:
-                Type: AWS::ECS::Service
-                Properties:
-                  TaskDefinition: "<TASK_DEFINITION>"
-                  LoadBalancerInfo:
-                    ContainerName: "${{ matrix.service }}"
-                    ContainerPort: ${{ matrix.port }}
-          EOF
-          cat appspec.yaml
-
-      # 4. Register the new revision and start a blue/green deployment
-      - name: Blue/green deploy via CodeDeploy
+      # 3. Register the new revision and update the service.
+      #    The service's BLUE_GREEN strategy turns this update into a blue/green
+      #    deployment: green tasks start → ALB weights flip → bake time → blue removed.
+      - name: Blue/green deploy (ECS built-in)
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render.outputs.task-definition }}
           cluster: ${{ env.PROJECT }}-cluster
           service: ${{ env.PROJECT }}-${{ matrix.service }}
-          codedeploy-appspec: appspec.yaml
-          codedeploy-application: ${{ env.PROJECT }}-app
-          codedeploy-deployment-group: ${{ env.PROJECT }}-${{ matrix.service }}-dg
           wait-for-service-stability: true
           wait-for-minutes: 20
 

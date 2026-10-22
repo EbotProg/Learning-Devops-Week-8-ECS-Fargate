@@ -1,0 +1,168 @@
+name: Deploy
+
+on:
+  # push:
+  #   branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: Deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-north-1
+  # Week 8: must match the Terraform "project" variable (default ebotprog-w8)
+  PROJECT: ebotprog-w8
+
+jobs:
+  # ── UNCHANGED from Week 7 ─────────────────────────────────────────
+  lint-test:
+    name: Lint Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        application: ["CRUD-nextjs-frontend", "CRUD-parse-server-backend"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: ${{ matrix.application }}/package-lock.json
+      - run: npm ci
+        working-directory: ${{ matrix.application }}
+      - run: npm run lint --if-present
+        working-directory: ${{ matrix.application }}
+
+  # ── CHANGED: frontend build now bakes in the ALB Parse URL ────────
+  build-and-push:
+    needs: lint-test
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - id: sha
+        run: echo "sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v7
+        with:
+          context: ./CRUD-nextjs-frontend
+          push: true
+          # NEW (Week 8): NEXT_PUBLIC_* values are baked into the browser bundle
+          # at BUILD time, so the image must know the ALB's Parse URL.
+          build-args: |
+            NEXT_PUBLIC_PARSE_APP_ID=${{ vars.PARSE_APP_ID }}
+            NEXT_PUBLIC_PARSE_SERVER_URL=${{ vars.PARSE_SERVER_URL }}
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/crud-nextjs-frontend:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/crud-nextjs-frontend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@v7
+        with:
+          context: ./CRUD-parse-server-backend
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/crud-parse-server-backend:${{ github.sha }}
+            ${{ steps.login-ecr.outputs.registry }}/crud-parse-server-backend:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── REPLACED: SSH + docker compose → ECS blue/green via CodeDeploy ─
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: frontend
+            repo: crud-nextjs-frontend
+            port: 3000
+          - service: backend
+            repo: crud-parse-server-backend
+            port: 1337
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+
+      # 1. Start from the latest registered revision (Terraform created revision 1)
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${PROJECT}-${{ matrix.service }}" \
+            --query taskDefinition > task-definition.json
+
+      # 2. Swap in the image built in this run (tagged with the commit SHA)
+      - name: Render new image into task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ matrix.service }}
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ matrix.repo }}:${{ needs.build-and-push.outputs.sha }}
+
+      # 3. AppSpec: tells CodeDeploy which container/port the ALB routes to.
+      #    The deploy action fills in TaskDefinition with the new revision ARN.
+      - name: Write appspec
+        run: |
+          cat > appspec.yaml <<EOF
+          version: 0.0
+          Resources:
+            - TargetService:
+                Type: AWS::ECS::Service
+                Properties:
+                  TaskDefinition: "<TASK_DEFINITION>"
+                  LoadBalancerInfo:
+                    ContainerName: "${{ matrix.service }}"
+                    ContainerPort: ${{ matrix.port }}
+          EOF
+          cat appspec.yaml
+
+      # 4. Register the new revision and start a blue/green deployment
+      - name: Blue/green deploy via CodeDeploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.PROJECT }}-cluster
+          service: ${{ env.PROJECT }}-${{ matrix.service }}
+          codedeploy-appspec: appspec.yaml
+          codedeploy-application: ${{ env.PROJECT }}-app
+          codedeploy-deployment-group: ${{ env.PROJECT }}-${{ matrix.service }}-dg
+          wait-for-service-stability: true
+          wait-for-minutes: 20
+
+  # ── UNCHANGED from Week 7 ─────────────────────────────────────────
+  notify:
+    needs: [lint-test, build-and-push, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Discord
+        run: |
+          STATUS="${{ needs.deploy.result }}"
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \"Deploy ${STATUS} for commit ${{ github.sha }}\"}" \
+            ${{ secrets.DISCORD_WEBHOOK_URL }}
