@@ -29,18 +29,6 @@ output "backend_service" {
   value = aws_ecs_service.svc["backend"].name
 }
 
-output "codedeploy_app" {
-  value = aws_codedeploy_app.this.name
-}
-
-output "frontend_deployment_group" {
-  value = aws_codedeploy_deployment_group.svc["frontend"].deployment_group_name
-}
-
-output "backend_deployment_group" {
-  value = aws_codedeploy_deployment_group.svc["backend"].deployment_group_name
-}
-
 output "frontend_task_definition" {
   value = aws_ecs_task_definition.svc["frontend"].arn
 }

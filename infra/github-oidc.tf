@@ -84,41 +84,34 @@ resource "aws_iam_role_policy" "github_ecr_push" {
   })
 }
 
-# 2. NEW for Week 8: register task definitions + start CodeDeploy blue/green
+# 2. NEW for Week 8: register task definitions + update the ECS services
+#    (updating a BLUE_GREEN service IS what starts a blue/green deployment)
 resource "aws_iam_role_policy" "github_ecs_deploy" {
-  name = "ecs-codedeploy-deploy"
+  name = "ecs-deploy"
   role = aws_iam_role.github_actions.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "TaskDefinitionsAndServices"
+        Sid    = "TaskDefinitions"
         Effect = "Allow"
         Action = [
           "ecs:DescribeTaskDefinition",
           "ecs:RegisterTaskDefinition",
-          "ecs:DescribeServices",
+          "ecs:ListServiceDeployments",
+          "ecs:DescribeServiceDeployments",
         ]
         Resource = "*" # these actions don't support resource-level scoping
       },
       {
-        Sid    = "CodeDeployBlueGreen"
+        Sid    = "UpdateWeek8Services"
         Effect = "Allow"
         Action = [
-          "codedeploy:CreateDeployment",
-          "codedeploy:GetDeployment",
-          "codedeploy:GetDeploymentConfig",
-          "codedeploy:GetDeploymentGroup",
-          "codedeploy:GetApplication",
-          "codedeploy:GetApplicationRevision",
-          "codedeploy:RegisterApplicationRevision",
+          "ecs:DescribeServices",
+          "ecs:UpdateService",
         ]
-        Resource = [
-          aws_codedeploy_app.this.arn,
-          "arn:aws:codedeploy:${var.region}:${data.aws_caller_identity.current.account_id}:deploymentgroup:${aws_codedeploy_app.this.name}/*",
-          "arn:aws:codedeploy:${var.region}:${data.aws_caller_identity.current.account_id}:deploymentconfig:*",
-        ]
+        Resource = [for s in aws_ecs_service.svc : s.id]
       },
       {
         # A task definition names the execution role. Registering it means

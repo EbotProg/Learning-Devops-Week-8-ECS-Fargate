@@ -2,7 +2,10 @@
 # ALB in the public subnets.
 #   :80   → frontend
 #   :1337 → backend (Parse); the browser calls Parse directly
-# Each service gets TWO target groups (blue + green) for CodeDeploy.
+#
+# Blue/green (ECS built-in): each service has a BLUE and a GREEN target group.
+# A listener RULE forwards to both with weights (100 / 0). During a deployment
+# ECS flips the weights (0 / 100). That flip IS the traffic switch.
 # ─────────────────────────────────────────────────────────────
 resource "aws_lb" "this" {
   name               = "${var.project}-alb"
@@ -52,6 +55,7 @@ resource "aws_lb_target_group" "green" {
   }
 }
 
+# Listener: the default action is only a fallback. Real traffic goes through the rule below.
 resource "aws_lb_listener" "prod" {
   for_each = local.services
 
@@ -60,13 +64,44 @@ resource "aws_lb_listener" "prod" {
   protocol          = "HTTP"
 
   default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.blue[each.key].arn
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "No matching rule"
+      status_code  = "404"
+    }
+  }
+}
+
+# Production listener rule: ECS shifts traffic by changing these weights.
+resource "aws_lb_listener_rule" "prod" {
+  for_each = local.services
+
+  listener_arn = aws_lb_listener.prod[each.key].arn
+  priority     = 100
+
+  action {
+    type = "forward"
+    forward {
+      target_group {
+        arn    = aws_lb_target_group.blue[each.key].arn
+        weight = 100
+      }
+      target_group {
+        arn    = aws_lb_target_group.green[each.key].arn
+        weight = 0
+      }
+    }
   }
 
-  # CodeDeploy flips this between blue and green on every deployment.
-  # Without this, the next terraform apply would flip it back.
+  condition {
+    path_pattern {
+      values = ["/*"]
+    }
+  }
+
+  # ECS changes the weights on every deployment. Terraform must not reset them.
   lifecycle {
-    ignore_changes = [default_action]
+    ignore_changes = [action]
   }
 }

@@ -39,7 +39,7 @@ locals {
 
 # ─────────────────────────────────────────────────────────────
 # Task definitions: the recipes. Container name = service key
-# ("frontend" / "backend"); the pipeline and appspec rely on that.
+# ("frontend" / "backend"); the pipeline relies on that.
 # ─────────────────────────────────────────────────────────────
 resource "aws_ecs_task_definition" "svc" {
   for_each = local.services
@@ -82,7 +82,7 @@ resource "aws_ecs_task_definition" "svc" {
 }
 
 # ─────────────────────────────────────────────────────────────
-# Services: the supervisors. Blue/green via CodeDeploy.
+# Services: the supervisors. Blue/green built into ECS (no CodeDeploy).
 # ─────────────────────────────────────────────────────────────
 resource "aws_ecs_service" "svc" {
   for_each = local.services
@@ -95,8 +95,20 @@ resource "aws_ecs_service" "svc" {
   health_check_grace_period_seconds = 120
   force_delete                      = true
 
+  # ECS controller (the default) + BLUE_GREEN strategy
   deployment_controller {
-    type = "CODE_DEPLOY"
+    type = "ECS"
+  }
+
+  deployment_configuration {
+    strategy             = "BLUE_GREEN"
+    bake_time_in_minutes = var.bake_time_minutes # blue stays alive this long after the switch
+  }
+
+  # Green never gets healthy → deployment fails → rolled back, users stay on blue
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
   }
 
   network_configuration {
@@ -109,18 +121,25 @@ resource "aws_ecs_service" "svc" {
     target_group_arn = aws_lb_target_group.blue[each.key].arn
     container_name   = each.key
     container_port   = each.value.container_port
+
+    advanced_configuration {
+      alternate_target_group_arn = aws_lb_target_group.green[each.key].arn
+      production_listener_rule   = aws_lb_listener_rule.prod[each.key].arn
+      role_arn                   = aws_iam_role.ecs_lb_infra.arn
+    }
   }
 
-  # CodeDeploy changes task_definition + target group on every deploy;
-  # autoscaling changes desired_count. Terraform must not undo those.
+  # The pipeline changes task_definition; ECS swaps which target group is "primary"
+  # after each deployment; autoscaling changes desired_count. Terraform must not undo those.
   lifecycle {
     ignore_changes = [task_definition, load_balancer, desired_count]
   }
 
   depends_on = [
-    aws_lb_listener.prod,
+    aws_lb_listener_rule.prod,
     aws_iam_role_policy_attachment.execution,
     aws_iam_role_policy.execution_ssm,
+    aws_iam_role_policy_attachment.ecs_lb_infra,
     aws_route_table_association.private,
   ]
 }

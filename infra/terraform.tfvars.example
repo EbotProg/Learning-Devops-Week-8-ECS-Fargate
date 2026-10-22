@@ -18,6 +18,6 @@ github_repo_id  = "<repo-id>"
 
 # ── Optional ──
 # cpu_target                    = 60
-# blue_termination_wait_minutes = 5
+# bake_time_minutes             = 5
 # domain_name                   = "w8.ebotprog.ink"
 # hosted_zone_name              = "ebotprog.ink"

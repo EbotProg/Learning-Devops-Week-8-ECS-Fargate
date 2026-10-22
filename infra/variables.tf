@@ -16,7 +16,7 @@ variable "vpc_cidr" {
 }
 
 # Only used for the FIRST task definition revision Terraform registers.
-# After that, GitHub Actions + CodeDeploy own deployments.
+# After that, GitHub Actions owns deployments (ECS blue/green).
 variable "image_tags" {
   type = map(string)
   default = {
@@ -53,9 +53,9 @@ variable "cpu_target" {
   default     = 60
 }
 
-# Blue/green: how long the old (blue) tasks stay alive after traffic moves to green.
-# This is your window for an instant manual rollback.
-variable "blue_termination_wait_minutes" {
+# Blue/green "bake time": how long the old (blue) tasks stay alive after traffic
+# moves to green. This is your window for an instant manual rollback.
+variable "bake_time_minutes" {
   type    = number
   default = 5
 }

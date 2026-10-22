@@ -4,7 +4,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.4" # 6.4+ required for ECS built-in blue/green
     }
   }
 }

@@ -41,25 +41,26 @@ resource "aws_iam_role_policy" "execution_ssm" {
 }
 
 # ─────────────────────────────────────────────────────────────
-# CodeDeploy service role: lets CodeDeploy create task sets,
-# move ALB listeners, and terminate the old (blue) tasks.
+# ECS infrastructure role for load balancers (replaces the CodeDeploy role).
+# Lets ECS itself change the listener rule weights (blue ↔ green)
+# and register targets during a blue/green deployment.
 # ─────────────────────────────────────────────────────────────
-data "aws_iam_policy_document" "codedeploy_assume" {
+data "aws_iam_policy_document" "ecs_infra_assume" {
   statement {
     actions = ["sts:AssumeRole"]
     principals {
       type        = "Service"
-      identifiers = ["codedeploy.amazonaws.com"]
+      identifiers = ["ecs.amazonaws.com"]
     }
   }
 }
 
-resource "aws_iam_role" "codedeploy" {
-  name               = "${var.project}-codedeploy-role"
-  assume_role_policy = data.aws_iam_policy_document.codedeploy_assume.json
+resource "aws_iam_role" "ecs_lb_infra" {
+  name               = "${var.project}-ecs-lb-infra-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_infra_assume.json
 }
 
-resource "aws_iam_role_policy_attachment" "codedeploy" {
-  role       = aws_iam_role.codedeploy.name
-  policy_arn = "arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS"
+resource "aws_iam_role_policy_attachment" "ecs_lb_infra" {
+  role       = aws_iam_role.ecs_lb_infra.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonECSInfrastructureRolePolicyForLoadBalancers"
 }
