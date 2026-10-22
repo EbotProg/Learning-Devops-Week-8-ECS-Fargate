@@ -1,0 +1,23 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is gitignored, never commit it)
+
+# ── MongoDB Atlas ──
+# Real string from Atlas → Cluster0 → Connect → Drivers, with password filled in and /parse before the ?
+database_uri = "mongodb+srv://parse:<password>@cluster0.<your-id>.mongodb.net/parse?retryWrites=true&w=majority&appName=Cluster0"
+
+# openssl rand -hex 32
+parse_master_key = "<long-random-string>"
+
+parse_app_id = "myAppId"
+
+# ── Repo whose pipeline deploys (Week 3 app repo); IDs are in your Week 7 sub line ──
+# gh api repos/EbotProg/<repo> --jq '.owner.id, .id'
+github_owner    = "EbotProg"
+github_repo     = "Learning-Devops-Week-3-Docker-Deep-Dive"   # the APP repo where the pipeline runs
+github_owner_id = "<owner-id>"
+github_repo_id  = "<repo-id>"
+
+# ── Optional ──
+# cpu_target                    = 60
+# blue_termination_wait_minutes = 5
+# domain_name                   = "w8.ebotprog.ink"
+# hosted_zone_name              = "ebotprog.ink"
